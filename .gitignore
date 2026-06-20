@@ -1,0 +1,6 @@
+__pycache__
+.env
+.env.example
+node_modules
+generated_docs
+uploaded_audio
