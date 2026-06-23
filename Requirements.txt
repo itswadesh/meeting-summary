@@ -1,0 +1,53 @@
+# =========================================================
+# AI Meeting Minutes Command Center — Python Requirements
+# =========================================================
+# Install with:
+#   pip install -r requirements.txt
+#
+# Python version required: 3.10 or newer (3.11 recommended)
+# =========================================================
+
+# --- Web framework / API server ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20      # required by FastAPI for Form()/File() uploads
+
+# --- Offline speech-to-text (audio -> text) ---
+faster-whisper==1.2.1
+# faster-whisper requires FFmpeg-free decoding via PyAV (bundled), but the
+# system FFmpeg binary is still recommended for broad audio-format support.
+# Install separately (not via pip):
+#   Windows: https://ffmpeg.org/download.html (add to PATH)
+#   macOS:   brew install ffmpeg
+#   Linux:   sudo apt install ffmpeg
+
+# --- Offline AI summarization (text -> structured summary) ---
+ollama==0.5.1
+# Requires the Ollama application/service installed separately (not via pip):
+#   https://ollama.com/download
+# After installing Ollama, pull the model used by this project:
+#   ollama pull llama3
+
+# --- MySQL database connector (user accounts + summary history) ---
+mysql-connector-python==9.1.0
+
+# --- Password hashing (account creation / login) ---
+bcrypt==4.2.1
+passlib[bcrypt]==1.7.4
+
+# --- PDF report generation ---
+reportlab==4.2.5
+
+# --- Environment variable management (DB credentials, SMTP config, etc.) ---
+python-dotenv==1.0.1
+
+# =========================================================
+# Notes:
+# - smtplib, os, re, shutil, uuid, urllib.parse are part of the Python
+#   standard library and do not need to be installed separately.
+# - On first run, faster-whisper will download the "tiny" Whisper model
+#   weights automatically (one-time, requires internet). After that,
+#   transcription runs fully offline.
+# - Ollama and its Llama 3 model must be installed and running locally
+#   (`ollama serve`) before starting the backend — see README.md.
+# =========================================================
