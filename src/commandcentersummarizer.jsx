@@ -1,14 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Square, FileText, Send, Loader2, Download, Terminal, Upload, Calendar, ShieldCheck, Cpu, Layers, FileSignature, Lock, User, ShieldAlert, Fingerprint, LogOut, History, Clock } from 'lucide-react';
+import { Mic, Square, FileText, Send, Loader2, Download, Terminal, Upload, Calendar, ShieldCheck, Cpu, Layers, FileSignature, Lock, User, ShieldAlert, LogOut, History, Clock, UserPlus } from 'lucide-react';
 
 export default function App() {
-  // Authentication & Session States
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [sessionUser, setSessionUser] = useState(null); 
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [isSignupMode, setIsSignupMode] = useState(false); // 🆕 Controls registration vs authentication layout
 
-  // Core App States
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -18,8 +17,8 @@ export default function App() {
   const [emailInput, setEmailInput] = useState('');
   const [emailStatus, setEmailStatus] = useState('');
   
-  // Real History State (Starts completely empty)
   const [historicalSummaries, setHistoricalSummaries] = useState([]);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
@@ -32,37 +31,66 @@ export default function App() {
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
     } else {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
+      clearInterval(timerIntervalRef.current);
     }
     return () => clearInterval(timerIntervalRef.current);
   }, [isRecording]);
 
-  const formatTimer = (totalSeconds) => {
-    const mins = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
-    const secs = String(totalSeconds % 60).padStart(2, '0');
-    return `${mins}:${secs}`;
+  const syncHistoryVault = async (userId) => {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/api/history/${userId}`);
+      if (response.ok) {
+        const historyData = await response.json();
+        setHistoricalSummaries(historyData);
+      }
+    } catch (err) {
+      console.error("Failed to sync structural asset data sets", err);
+    }
   };
 
-  const handleLoginSubmit = (e) => {
+  const handleLoginSubmit = async (e) => {
     e.preventDefault();
     if (!usernameInput || !passwordInput) return;
-    
     setAuthLoading(true);
-    // Mimics the server network delay before flipping state
-    setTimeout(() => {
+
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ 
+          username: usernameInput, 
+          password: passwordInput,
+          is_signup: isSignupMode ? 'true' : 'false' // 🆕 Sends registration condition state flag to main.py
+        })
+      });
+
+      const responseData = await response.json();
+
+      if (response.ok) {
+        setSessionUser(responseData);
+        if (isSignupMode) {
+          alert("Account structural block registered successfully! Automatically logging in...");
+          setIsSignupMode(false);
+        }
+        await syncHistoryVault(responseData.user_id);
+      } else {
+        alert(responseData.detail || "Authentication credentials rejected.");
+      }
+    } catch (error) {
+      alert("Database link connection error.");
+    } finally {
       setAuthLoading(false);
-      setIsAuthenticated(true);
-    }, 1000);
+    }
   };
 
   const handleLogout = () => {
-    setIsAuthenticated(false);
+    setSessionUser(null);
     setUsernameInput('');
     setPasswordInput('');
     setSummaryData(null);
-    setHistoricalSummaries([]); // Wipe state on logout
+    setHistoricalSummaries([]);
+    setShowHistoryModal(false);
+    setIsSignupMode(false);
   };
 
   const startRecording = async () => {
@@ -70,23 +98,16 @@ export default function App() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      
-      mediaRecorderRef.current.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          chunksRef.current.push(e.data);
-        }
-      };
-
+      mediaRecorderRef.current.ondataavailable = (e) => chunksRef.current.push(e.data);
       mediaRecorderRef.current.onstop = async () => {
         const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        await uploadAudioPipeline(audioBlob, `live_meeting_${meetingDate}_${Date.now()}.webm`);
+        await uploadAudioPipeline(audioBlob, `live_audio.webm`);
         stream.getTracks().forEach(track => track.stop());
       };
-
       mediaRecorderRef.current.start();
       setIsRecording(true);
     } catch (err) {
-      alert("Microphone hardware access denied: " + err.message);
+      alert("Microphone hardware connection failure.");
     }
   };
 
@@ -106,21 +127,24 @@ export default function App() {
   const uploadAudioPipeline = async (audioBlob, filename) => {
     setLoading(true);
     const formData = new FormData();
-    formData.append('audio_file', audioBlob, `DATE-${meetingDate}_${filename}`);
+    formData.append('user_id', sessionUser.user_id);
+    formData.append('meeting_date', meetingDate);
+    formData.append('audio_file', audioBlob, filename);
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/summarize-audio', {
+      const response = await fetch('http://127.0.0.1:8000/api/summarize-audio', {
         method: 'POST',
         body: formData,
       });
       if (response.ok) {
-        const rawHtmlData = await response.text();
-        extractDataFromBackendHtml(rawHtmlData);
+        const result = await response.json();
+        setSummaryData(result);
+        await syncHistoryVault(sessionUser.user_id);
       } else {
-        alert("Audio pipeline processing failed.");
+        alert("Pipeline calculation rejection error.");
       }
     } catch (error) {
-      alert("Network Connection Error: " + error.message);
+      alert("Network exception layer encountered.");
     } finally {
       setLoading(false);
     }
@@ -132,435 +156,253 @@ export default function App() {
     setLoading(true);
 
     try {
-      const structuredPayload = `[MEETING DATE: ${meetingDate}]\n\n${textInput}`;
-      const response = await fetch('http://127.0.0.1:8000/summarize-text', {
+      const response = await fetch('http://127.0.0.1:8000/api/summarize-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ 'transcript': structuredPayload })
+        body: new URLSearchParams({
+          user_id: sessionUser.user_id,
+          meeting_date: meetingDate,
+          transcript: textInput
+        })
       });
 
       if (response.ok) {
-        const rawHtmlData = await response.text();
-        extractDataFromBackendHtml(rawHtmlData);
-      } else {
-        alert("Text processing failed.");
+        const result = await response.json();
+        setSummaryData(result);
+        setTextInput('');
+        await syncHistoryVault(sessionUser.user_id);
       }
     } catch (error) {
-      alert("Network Error: " + error.message);
+      alert("Text generation framework error.");
     } finally {
       setLoading(false);
     }
   };
 
-  const extractDataFromBackendHtml = (htmlString) => {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(htmlString, 'text/html');
-    
-    const divs = doc.querySelectorAll('div > div');
-    let summaryText = "";
-    let transcriptText = "";
-    
-    if (divs.length >= 2) {
-      summaryText = divs[0].innerText || divs[0].textContent;
-      transcriptText = divs[1].innerText || divs[1].textContent;
-    } else {
-      const pageDivs = doc.querySelectorAll('div');
-      if(pageDivs.length >= 2) {
-        summaryText = pageDivs[1].innerText;
-        transcriptText = pageDivs[2].innerText;
-      }
-    }
-
-    const pdfAnchor = doc.querySelector('a[href^="/download-pdf/"]');
-    const pdfPath = pdfAnchor ? pdfAnchor.getAttribute('href') : '#';
-
-    // Generate real, trackable session IDs dynamically on creation
-    const activeSessionId = `SESSION-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    const visibleSummary = `📅 MEETING DATE: ${meetingDate}\n🔑 SESSION ID: ${activeSessionId}\n========================================\n\n${summaryText.trim()}`;
-
-    const newResult = {
-      summary: visibleSummary,
-      transcript: transcriptText.trim(),
-      pdfUrl: pdfPath
-    };
-
-    setSummaryData(newResult);
-
-    // Save item directly into the interactive history layout real-time
-    setHistoricalSummaries(prev => [
-      { session_id: activeSessionId, date: meetingDate, summary: visibleSummary },
-      ...prev
-    ]);
-    setTextInput('');
-  };
-
   const sendEmailReport = async (e) => {
     e.preventDefault();
     if (!emailInput || !summaryData) return;
-    setEmailStatus('Initializing secure SMTP relay routing...');
+    setEmailStatus('SMTP Routing payload processing...');
 
     try {
       const filename = summaryData.pdfUrl.split('/').pop();
-      const response = await fetch('http://127.0.0.1:8000/send-email', {
+      const response = await fetch('http://127.0.0.1:8000/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
-          'recipient': emailInput,
-          'pdf_filename': filename,
-          'summary_text': summaryData.summary
+          recipient: emailInput,
+          pdf_filename: filename,
+          summary_text: summaryData.summary
         })
       });
-
-      if (response.ok) {
-        setEmailStatus('✅ Summary dispatch transmitted successfully.');
-      } else {
-        setEmailStatus('❌ System SMTP routing rejection encountered.');
-      }
+      if (response.ok) setEmailStatus('✅ Transmitted securely.');
     } catch (error) {
-      setEmailStatus('❌ Transport connection loss: ' + error.message);
+      setEmailStatus('❌ Routing transport channel error.');
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#040815] text-slate-200 font-sans antialiased selection:bg-cyan-500/30 selection:text-cyan-200 relative overflow-x-hidden">
-      
-      <style dangerouslySetInnerHTML={{__html: `
-        @keyframes rocketAscent {
-          0% { transform: translateY(115vh) translateX(-20px) scale(0.9); opacity: 0; }
-          5% { opacity: 0.4; }
-          70% { opacity: 0.35; }
-          100% { transform: translateY(-30vh) translateX(40px) scale(1.05); opacity: 0; }
-        }
-        @keyframes plumeFlicker {
-          0%, 100% { transform: scaleX(1) translateY(0px); opacity: 0.9; filter: blur(1px); }
-          50% { transform: scaleX(1.2) translateY(2px); opacity: 1; filter: blur(0px); }
-        }
-        .animate-rocket { animation: rocketAscent 24s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
-        .animate-plume { animation: plumeFlicker 0.15s ease-in-out infinite; }
-        .bg-grid-pattern {
-          background-size: 40px 40px;
-          background-image: linear-gradient(to right, rgba(15, 32, 67, 0.35) 1px, transparent 1px),
-                            linear-gradient(to bottom, rgba(15, 32, 67, 0.35) 1px, transparent 1px);
-        }
-      `}} />
-
-      <div className="absolute inset-0 bg-grid-pattern [mask-image:radial-gradient(ellipse_80%_60%_at_50%_40%,#000_60%,transparent_100%)] pointer-events-none z-0" />
-      
-      <div className="absolute top-0 bottom-0 left-1/2 md:left-[70%] w-32 pointer-events-none z-0 hidden sm:block">
-        <div className="absolute inset-0 animate-rocket flex flex-col items-center">
-          <div className="w-4 h-16 bg-gradient-to-b from-cyan-400 via-slate-400 to-slate-600 rounded-t-full relative shadow-[0_0_20px_rgba(34,211,238,0.2)]">
-            <div className="absolute bottom-0 -left-2 w-2 h-6 bg-cyan-600 rounded-bl-full" />
-            <div className="absolute bottom-0 -right-2 w-2 h-6 bg-cyan-600 rounded-br-full" />
-          </div>
-          <div className="w-3 h-24 bg-gradient-to-b from-amber-400 via-orange-500 to-transparent rounded-t-full animate-plume mix-blend-screen shadow-[0_0_30px_rgba(245,158,11,0.8)]" />
-        </div>
-      </div>
-
-      {!isAuthenticated ? (
-        /* LOGIN HUB */
+    <div className="min-h-screen bg-[#040815] text-slate-200 font-sans antialiased relative overflow-x-hidden">
+      {!sessionUser ? (
+        /* AUTH ENTRY GATEWAY */
         <div className="min-h-screen flex items-center justify-center p-6 relative z-10">
-          <div className="w-full max-w-md backdrop-blur-2xl bg-[#091129]/60 border border-slate-700/50 rounded-xl p-8 shadow-[0_20px_50px_rgba(0,0,0,0.7)] relative overflow-hidden group">
-            <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-cyan-500 via-blue-600 to-cyan-500" />
-            
+          <div className="w-full max-w-md backdrop-blur-2xl bg-[#091129]/60 border border-slate-700/50 rounded-xl p-8 shadow-2xl relative overflow-hidden">
+            <div className={`absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r ${isSignupMode ? 'from-emerald-500 via-teal-600 to-emerald-500' : 'from-cyan-500 via-blue-600 to-cyan-500'}`} />
             <div className="flex flex-col items-center text-center mb-8">
-              <div className="h-14 w-14 rounded-lg border border-cyan-500/40 bg-[#060b1a] flex items-center justify-center mb-4 shadow-[0_0_20px_rgba(6,182,212,0.15)] relative">
-                <Lock className="h-6 w-6 text-cyan-400 stroke-[1.5]" />
+              <div className={`h-14 w-14 rounded-lg border bg-[#060b1a] flex items-center justify-center mb-4 ${isSignupMode ? 'border-emerald-500/40' : 'border-cyan-500/40'}`}>
+                {isSignupMode ? <UserPlus className="h-6 w-6 text-emerald-400" /> : <Lock className="h-6 w-6 text-cyan-400" />}
               </div>
-              <h1 className="text-sm font-black tracking-[0.25em] text-white uppercase font-mono">Command Network</h1>
-              <p className="text-[10px] text-cyan-500/60 font-mono tracking-widest uppercase mt-1">Terminal Access Protocol</p>
+              <h1 className="text-sm font-black tracking-[0.25em] text-white uppercase font-mono">
+                {isSignupMode ? 'Account Initialization Protocol' : 'Secure Access Protocol'}
+              </h1>
             </div>
 
             <form onSubmit={handleLoginSubmit} className="space-y-5">
               <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-slate-400 uppercase tracking-widest font-bold block">Operator Username</label>
-                <div className="flex items-center bg-[#040815]/90 border border-slate-800 rounded-lg px-3.5 py-2.5 focus-within:border-cyan-500/60 transition-all shadow-inner">
-                  <User className="h-4 w-4 text-slate-500 mr-3 shrink-0" />
-                  <input 
-                    type="text"
-                    required
-                    value={usernameInput}
-                    onChange={(e) => setUsernameInput(e.target.value)}
-                    placeholder="Username..."
-                    className="w-full bg-transparent text-xs font-mono text-slate-200 placeholder-slate-600 focus:outline-none tracking-wide"
-                  />
+                <label className="text-[10px] font-mono text-slate-400 uppercase tracking-widest font-bold block">Operator Handle</label>
+                <div className="flex items-center bg-[#040815]/90 border border-slate-800 rounded-lg px-3.5 py-2.5">
+                  <User className="h-4 w-4 text-slate-500 mr-3" />
+                  <input type="text" required value={usernameInput} onChange={(e) => setUsernameInput(e.target.value)} placeholder="Identifier..." className="w-full bg-transparent text-xs font-mono text-slate-200 focus:outline-none" />
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-slate-400 uppercase tracking-widest font-bold block">Security Password</label>
-                <div className="flex items-center bg-[#040815]/90 border border-slate-800 rounded-lg px-3.5 py-2.5 focus-within:border-cyan-500/60 transition-all shadow-inner">
-                  <Lock className="h-4 w-4 text-slate-500 mr-3 shrink-0" />
-                  <input 
-                    type="password"
-                    required
-                    value={passwordInput}
-                    onChange={(e) => setPasswordInput(e.target.value)}
-                    placeholder="•••••••••••••••"
-                    className="w-full bg-transparent text-xs font-mono text-slate-200 placeholder-slate-600 focus:outline-none tracking-widest"
-                  />
+                <label className="text-[10px] font-mono text-slate-400 uppercase tracking-widest font-bold block">Security Passphrase</label>
+                <div className="flex items-center bg-[#040815]/90 border border-slate-800 rounded-lg px-3.5 py-2.5">
+                  <Lock className="h-4 w-4 text-slate-500 mr-3" />
+                  <input type="password" required value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} placeholder="•••••••••••••" className="w-full bg-transparent text-xs font-mono text-slate-200 focus:outline-none" />
                 </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="w-full py-3 mt-2 bg-gradient-to-r from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-500 text-white font-mono text-xs font-black rounded-md shadow-lg transition-all duration-150 active:scale-[0.98] flex items-center justify-center space-x-2 border border-cyan-400/20 uppercase tracking-widest"
-              >
-                {authLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin text-cyan-300" />
-                    <span>Verifying Matrix...</span>
-                  </>
-                ) : (
-                  <>
-                    <ShieldAlert className="h-3.5 w-3.5" />
-                    <span>Authorize Terminal</span>
-                  </>
-                )}
+              {/* 🆕 Button automatically adapts text and gradient themes according to the selected mode state */}
+              <button type="submit" disabled={authLoading} className={`w-full py-3 text-white font-mono text-xs font-black rounded shadow-lg uppercase tracking-widest flex items-center justify-center space-x-2 bg-gradient-to-r ${isSignupMode ? 'from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600' : 'from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600'}`}>
+                {authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <span>{isSignupMode ? 'Register New Profile' : 'Authenticate Client'}</span>}
               </button>
             </form>
+
+            {/* 🆕 Mode selection switcher block */}
+            <div className="mt-6 pt-5 border-t border-slate-800/60 text-center">
+              <p className="text-[11px] font-mono text-slate-400">
+                {isSignupMode ? "Already a recognized infrastructure node?" : "New operative targeting the network?"}
+                <button
+                  type="button"
+                  onClick={() => setIsSignupMode(!isSignupMode)}
+                  className={`ml-2 underline font-bold tracking-wider uppercase transition-colors text-[10px] ${isSignupMode ? 'text-cyan-400 hover:text-cyan-300' : 'text-emerald-400 hover:text-emerald-300'}`}
+                >
+                  {isSignupMode ? "Execute Access Login" : "Initialize New Profile"}
+                </button>
+              </p>
+            </div>
           </div>
         </div>
       ) : (
-        /* MAIN APPLICATION MONITOR */
+        /* ACTIVE CONTROL DASHBOARD */
         <>
           <header className="border-b border-slate-800/60 bg-[#070e22]/90 backdrop-blur-xl sticky top-0 z-50">
             <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
               <div className="flex items-center space-x-4">
-                <div className="h-11 w-11 rounded border border-cyan-500/40 bg-gradient-to-b from-cyan-950/60 to-slate-900 flex items-center justify-center">
-                  <Cpu className="h-5 w-5 text-cyan-400" />
-                </div>
+                <Cpu className="h-5 w-5 text-cyan-400" />
                 <div>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-xs font-black tracking-[0.28em] text-white font-mono uppercase">Control Consolidation Hub</span>
-                    <span className="px-2 py-0.5 rounded text-[9px] font-black bg-cyan-950/80 text-cyan-400 font-mono border border-cyan-800/50 uppercase">OPERATOR: {usernameInput.toUpperCase()}</span>
-                  </div>
+                  <span className="text-xs font-black tracking-[0.28em] text-white font-mono uppercase">AI Minutes Aggregator</span>
+                  <span className="ml-3 px-2 py-0.5 rounded text-[9px] bg-cyan-950 text-cyan-400 font-mono border border-cyan-800/50 uppercase">USER: {sessionUser.username}</span>
                 </div>
               </div>
               
               <div className="flex items-center space-x-4">
-                <div className="flex items-center space-x-2.5 px-3 py-1.5 rounded border border-emerald-500/30 bg-emerald-950/20 text-emerald-400 font-mono text-xs">
-                  <ShieldCheck className="h-4 w-4" />
-                  <span className="tracking-widest font-black text-[10px]">SECURE ACTIVE</span>
-                </div>
-                <button onClick={handleLogout} className="p-2 border border-slate-800 hover:border-rose-900/50 hover:bg-rose-950/20 rounded-md text-slate-400 hover:text-rose-400 transition-all font-mono text-xs flex items-center space-x-1.5">
+                <button onClick={() => setShowHistoryModal(true)} className="px-3 py-1.5 border border-cyan-500/30 bg-cyan-950/20 text-cyan-400 font-mono text-xs flex items-center space-x-2 rounded hover:bg-cyan-950/50 transition-all">
+                  <History className="h-4 w-4" />
+                  <span className="tracking-wider text-[10px] font-bold">VIEW PREV SUMMARIES ({historicalSummaries.length})</span>
+                </button>
+
+                <button onClick={handleLogout} className="p-2 border border-slate-800 text-slate-400 hover:text-rose-400 rounded transition-all">
                   <LogOut className="h-3.5 w-3.5" />
-                  <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline">Terminate</span>
                 </button>
               </div>
             </div>
           </header>
 
           <main className="max-w-7xl mx-auto px-6 py-10 grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
-            {/* Control Panel */}
             <section className="lg:col-span-5 space-y-6">
               <div className="backdrop-blur-xl bg-[#091129]/40 border border-slate-700/40 rounded-lg p-4 flex items-center justify-between shadow-2xl">
                 <div className="flex items-center space-x-3">
                   <Calendar className="h-4 w-4 text-cyan-400" />
-                  <span className="text-xs font-mono font-black text-slate-300 uppercase tracking-widest">Operation Date:</span>
+                  <span className="text-xs font-mono font-black text-slate-300 uppercase tracking-widest">Session Execution Target Date:</span>
                 </div>
-                <input 
-                  type="date" 
-                  value={meetingDate}
-                  onChange={(e) => setMeetingDate(e.target.value)}
-                  className="bg-[#050917] border border-slate-800 text-cyan-400 rounded-md px-3 py-1.5 text-xs font-mono font-bold focus:outline-none focus:border-cyan-500 transition-colors"
-                />
+                <input type="date" value={meetingDate} onChange={(e) => setMeetingDate(e.target.value)} className="bg-[#050917] border border-slate-800 text-cyan-400 rounded px-3 py-1.5 text-xs font-mono font-bold focus:outline-none" />
               </div>
               
-              <div className="backdrop-blur-xl bg-[#091129]/40 border border-slate-700/40 rounded-lg shadow-2xl overflow-hidden">
-                <div className="px-5 py-3 border-b border-slate-800/50 bg-[#101c3d]/60 flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <Layers className="h-3.5 w-3.5 text-cyan-400" />
-                    <h2 className="text-xs uppercase tracking-[0.15em] font-black text-slate-200 font-mono">Real-Time Capture</h2>
-                  </div>
-                  {isRecording && (
-                    <div className="flex items-center space-x-2 bg-rose-950/40 px-2.5 py-0.5 rounded border border-rose-900/50">
-                      <span className="text-xs font-mono text-rose-400 font-black tracking-widest">{formatTimer(recordingSeconds)}</span>
-                      <div className="h-2 w-2 rounded-full bg-rose-500 animate-ping" />
-                    </div>
-                  )}
-                </div>
-                
-                <div className="p-5">
-                  <div className="relative rounded-md bg-[#050917]/80 border border-slate-900/60 p-6 flex flex-col items-center justify-center min-h-[140px] shadow-inner">
-                    {isRecording ? (
-                      <>
-                        <div className="h-12 w-12 rounded-full bg-rose-950/40 border-2 border-rose-500/40 flex items-center justify-center mb-3">
-                          <Mic className="h-5 w-5 text-rose-400" />
-                        </div>
-                        <span className="text-[10px] font-mono text-rose-400 tracking-[0.15em] font-black uppercase">Ingesting Live Audio</span>
-                      </>
+              <div className="backdrop-blur-xl bg-[#091129]/40 border border-slate-700/40 rounded-lg shadow-2xl p-5">
+                <h2 className="text-xs uppercase tracking-widest font-black text-slate-200 font-mono mb-4">Real Time Audio Recorder</h2>
+                <div className="rounded bg-[#050917]/80 border border-slate-900/60 p-6 flex flex-col items-center justify-center min-h-[120px]">
+                  {isRecording ? <span className="text-[10px] font-mono text-rose-400 animate-pulse">RECORDING ACTIVE - INGESTING ({recordingSeconds}s)</span> : <span className="text-[10px] font-mono text-slate-500"></span>}
+                  <div className="mt-4">
+                    {!isRecording ? (
+                      <button type="button" onClick={startRecording} disabled={loading} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-mono text-xs rounded uppercase tracking-widest">Start Transcribe Engine</button>
                     ) : (
-                      <>
-                        <div className="h-11 w-11 rounded-lg bg-[#0b132c] border border-slate-800 flex items-center justify-center mb-3 text-slate-500">
-                          <Mic className="h-4 w-4" />
-                        </div>
-                        <span className="text-[10px] font-mono text-slate-400 tracking-widest font-bold uppercase">Receiver Grid: Idle</span>
-                      </>
+                      <button type="button" onClick={stopRecording} className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs rounded uppercase tracking-widest">Halt Pipeline</button>
                     )}
-
-                    <div className="mt-5 relative z-10">
-                      {!isRecording ? (
-                        <button type="button" onClick={startRecording} disabled={loading} className="px-5 py-2 bg-gradient-to-b from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-500 text-white font-mono text-xs font-black rounded border border-cyan-500/30 uppercase tracking-widest">
-                          <Mic className="h-3.5 w-3.5" /> <span>Initialize Recording</span>
-                        </button>
-                      ) : (
-                        <button type="button" onClick={stopRecording} className="px-5 py-2 bg-gradient-to-b from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white font-mono text-xs font-black rounded border border-rose-500/30 uppercase tracking-widest">
-                          <Square className="h-3.5 w-3.5" /> <span>Halt & Process</span>
-                        </button>
-                      )}
-                    </div>
                   </div>
                 </div>
+                <label className="mt-4 flex flex-col items-center justify-center rounded bg-[#050917]/80 border border-dashed border-slate-800 p-4 text-center cursor-pointer hover:border-cyan-500/40">
+                  <span className="text-xs font-mono text-slate-400">Or Inject Binary Audio Object File</span>
+                  <input type="file" accept="audio/*" disabled={loading || isRecording} onChange={handleFileUpload} className="hidden" />
+                </label>
               </div>
 
-              <div className="backdrop-blur-xl bg-[#091129]/40 border border-slate-700/40 rounded-lg shadow-2xl overflow-hidden">
-                <div className="px-5 py-3 border-b border-slate-800/50 bg-[#101c3d]/60 flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <Upload className="h-3.5 w-3.5 text-cyan-400" />
-                    <h2 className="text-xs uppercase tracking-[0.15em] font-black text-slate-200 font-mono">Binary Ingestion</h2>
-                  </div>
-                </div>
-                <div className="p-5">
-                  <label className="group flex flex-col items-center justify-center rounded-md bg-[#050917]/80 border-2 border-dashed border-slate-800/60 hover:border-cyan-500/40 p-5 text-center cursor-pointer transition-all min-h-[105px]">
-                    <Upload className="h-5 w-5 text-slate-500 group-hover:text-cyan-400 mb-2" />
-                    <span className="text-xs font-mono text-slate-300 group-hover:text-cyan-400 font-black tracking-wide">Upload Recording File</span>
-                    <input type="file" accept="audio/*" disabled={loading || isRecording} onChange={handleFileUpload} className="hidden" />
-                  </label>
-                </div>
-              </div>
-
-              <div className="backdrop-blur-xl bg-[#091129]/40 border border-slate-700/40 rounded-lg shadow-2xl overflow-hidden">
-                <div className="px-5 py-3 border-b border-slate-800/50 bg-[#101c3d]/60 flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <Terminal className="h-3.5 w-3.5 text-cyan-400" />
-                    <h2 className="text-xs uppercase tracking-[0.15em] font-black text-slate-200 font-mono">Text Stream</h2>
-                  </div>
-                </div>
-                <form onSubmit={processTextPipeline} className="p-5 space-y-4">
-                  <div className="rounded bg-[#050917]/90 border border-slate-900 p-3 focus-within:border-cyan-500/50 transition-all">
-                    <textarea
-                      value={textInput}
-                      onChange={(e) => setTextInput(e.target.value)}
-                      placeholder="Paste meeting logs or transcripts to process..."
-                      className="w-full h-20 bg-transparent text-slate-200 placeholder-slate-600 text-xs font-mono focus:outline-none resize-none leading-relaxed"
-                    />
-                  </div>
-                  <button type="submit" disabled={loading || !textInput.trim()} className="w-full py-2.5 bg-gradient-to-r from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600 text-white font-mono text-xs font-black rounded border border-cyan-400/20 uppercase tracking-widest">
-                    <Send className="h-3.5 w-3.5" /> <span>Generate Summary</span>
-                  </button>
+              <div className="backdrop-blur-xl bg-[#091129]/40 border border-slate-700/40 rounded-lg shadow-2xl p-5">
+                <h2 className="text-xs uppercase tracking-widest font-black text-slate-200 font-mono mb-3">Direct Text summarizer</h2>
+                <form onSubmit={processTextPipeline} className="space-y-3">
+                  <textarea value={textInput} onChange={(e) => setTextInput(e.target.value)} placeholder="Paste operational script logs or raw text files..." className="w-full h-24 bg-[#050917]/90 border border-slate-900 p-3 text-slate-200 text-xs font-mono focus:outline-none rounded resize-none" />
+                  <button type="submit" disabled={loading || !textInput.trim()} className="w-full py-2 bg-gradient-to-r from-cyan-600 to-cyan-700 text-white font-mono text-xs font-black rounded uppercase tracking-widest">Compute Matrix Profile</button>
                 </form>
               </div>
             </section>
 
-            {/* Display / Logs Output Panel */}
-            <section className="lg:col-span-7 space-y-6">
+            <section className="lg:col-span-7">
               <div className="backdrop-blur-xl bg-[#091129]/40 border border-slate-700/40 rounded-lg shadow-2xl overflow-hidden flex flex-col min-h-[460px]">
-                <div className="px-6 py-3 border-b border-slate-800/50 bg-[#101c3d]/60 flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <FileText className="h-4 w-4 text-cyan-400" />
-                    <h2 className="text-xs uppercase tracking-[0.15em] font-black text-slate-100 font-mono">Active Response Payload</h2>
-                  </div>
+                <div className="px-6 py-3 border-b border-slate-800/50 bg-[#101c3d]/60">
+                  <h2 className="text-xs uppercase tracking-widest font-black text-slate-100 font-mono">Active Target Summary </h2>
                 </div>
 
                 {loading && (
-                  <div className="flex-1 flex flex-col items-center justify-center p-12 text-center bg-[#050917]/50">
-                    <Loader2 className="h-8 w-8 animate-spin text-cyan-400 mb-4" />
-                    <p className="text-xs font-mono font-black tracking-widest text-cyan-400 uppercase">Processing Core Matrix Modules...</p>
+                  <div className="flex-1 flex flex-col items-center justify-center p-12 bg-[#050917]/50">
+                    <Loader2 className="h-8 w-8 animate-spin text-cyan-400 mb-2" />
+                    <span className="text-xs font-mono text-cyan-400 tracking-widest uppercase">Calculating Transformer Weight Matrices...</span>
                   </div>
                 )}
 
                 {!loading && !summaryData && (
-                  <div className="flex-1 flex flex-col items-center justify-center p-12 text-center text-slate-500 font-mono bg-[#050917]/20">
-                    <Terminal className="h-6 w-6 text-slate-600 mb-2" />
-                    <p className="text-[11px] font-black tracking-widest text-slate-400 uppercase">Terminal Standby: Processing Matrix Idle</p>
-                  </div>
+                  <div className="flex-1 flex items-center justify-center p-12 text-slate-500 font-mono text-xs uppercase tracking-widest">Interface Engine Standby Mode</div>
                 )}
 
                 {!loading && summaryData && (
-                  <div className="flex-1 flex flex-col bg-[#050917]/90 overflow-hidden">
-                    <div className="p-5 border-b border-slate-800/80 overflow-y-auto flex-1">
-                      <div className="flex items-center space-x-2 mb-3">
-                        <FileSignature className="h-3.5 w-3.5 text-cyan-500" />
-                        <span className="text-[10px] font-mono font-black px-2 py-0.5 rounded bg-cyan-950/80 text-cyan-400 border border-cyan-800/50 uppercase">Active Document</span>
-                      </div>
-                      <div className="text-[13px] font-sans font-semibold text-[#1e293b] bg-[#f8fafc] border-l-4 border-cyan-600 rounded-r-lg p-5 whitespace-pre-wrap shadow-lg">
-                        {summaryData.summary}
-                      </div>
+                  <div className="flex-1 flex flex-col bg-[#050917]/90 p-5 overflow-y-auto">
+                    <div className="mb-3 text-[11px] font-mono text-cyan-400 bg-cyan-950/40 border border-cyan-800/40 rounded px-3 py-1.5">
+                      IDENTIFIER ID: {summaryData.meeting_id} | DATE MATCHED: {summaryData.meeting_date}
+                    </div>
+                    <div className="flex-1 text-xs font-mono text-cyan-400 bg-[#050917] border border-slate-800/80 p-4 rounded whitespace-pre-wrap leading-relaxed shadow-inner">
+                      {summaryData.summary}
                     </div>
 
-                    <div className="p-4 bg-[#091129] space-y-3 border-t border-slate-800/50">
-                      <a href={`http://127.0.0.1:8000${summaryData.pdfUrl}`} download className="w-full py-2 bg-gradient-to-r from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600 text-white rounded font-mono text-xs font-black flex items-center justify-center space-x-2 tracking-widest uppercase">
-                        <Download className="h-3.5 w-3.5" /> <span>Export Generated Asset</span>
+                    <div className="mt-4 space-y-3">
+                      <a href={`http://127.0.0.1:8000${summaryData.pdfUrl}`} download className="w-full py-2 bg-gradient-to-r from-cyan-600 to-cyan-700 text-white rounded font-mono text-xs font-black flex items-center justify-center space-x-2 tracking-widest uppercase">
+                        <Download className="h-3.5 w-3.5" /> <span>Pull Document Payload Asset</span>
                       </a>
-
-                      <form onSubmit={sendEmailReport} className="border border-slate-800 bg-[#050917]/90 p-3 rounded space-y-2">
-                        <div className="flex space-x-3">
-                          <input
-                            type="email"
-                            required
-                            value={emailInput}
-                            onChange={(e) => setEmailInput(e.target.value)}
-                            placeholder="officer@network.internal"
-                            className="flex-1 px-3 py-1.5 bg-[#0b132c] border border-slate-800 rounded text-xs font-mono focus:outline-none focus:border-cyan-500 text-slate-100 placeholder-slate-600"
-                          />
-                          <button type="submit" className="px-4 py-1.5 bg-[#121f44] text-cyan-400 border border-cyan-900/60 rounded text-xs font-mono font-black uppercase">
-                            Dispatch
-                          </button>
-                        </div>
-                        {emailStatus && <p className="text-[9px] font-mono text-cyan-400 tracking-tight">{emailStatus}</p>}
+                      <form onSubmit={sendEmailReport} className="border border-slate-800 bg-[#050917]/90 p-3 rounded flex items-center space-x-3">
+                        <input type="email" required value={emailInput} onChange={(e) => setEmailInput(e.target.value)} placeholder="target@intranet.local" className="flex-1 px-3 py-1 bg-[#0b132c] border border-slate-800 rounded text-xs font-mono focus:outline-none text-slate-100" />
+                        <button type="submit" className="px-4 py-1 bg-[#121f44] text-cyan-400 border border-cyan-900/60 rounded text-xs font-mono font-black uppercase">Relay</button>
                       </form>
+                      {emailStatus && <p className="text-[9px] font-mono text-cyan-500 tracking-tight">{emailStatus}</p>}
                     </div>
                   </div>
                 )}
               </div>
+            </section>
+          </main>
 
-              {/* REAL DATA HISTORY TRAY */}
-              <div className="backdrop-blur-xl bg-[#091129]/40 border border-slate-700/40 rounded-lg shadow-2xl overflow-hidden">
-                <div className="px-5 py-3 border-b border-slate-800/50 bg-[#101c3d]/60 flex items-center justify-between">
+          
+          {showHistoryModal && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50">
+              <div className="w-full max-w-4xl bg-[#091129] border border-slate-800 rounded-xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+                <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-[#101c3d]/40">
                   <div className="flex items-center space-x-2">
-                    <History className="h-4 w-4 text-cyan-500" />
-                    <h3 className="text-xs uppercase tracking-[0.15em] font-black text-slate-200 font-mono">Historical Session Vault ({usernameInput || 'No Active Session'})</h3>
+                    <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                    <h3 className="text-xs uppercase tracking-widest font-black text-slate-200 font-mono">Account Isolated Data Vault Summary History</h3>
                   </div>
-                  <span className="text-[9px] px-2 py-0.5 rounded bg-[#040815] font-mono font-bold text-slate-500 uppercase tracking-widest">Live Sync</span>
+                  <button onClick={() => setShowHistoryModal(false)} className="text-slate-500 hover:text-white font-mono text-xs uppercase tracking-wider">Close Panel</button>
                 </div>
                 
-                <div className="p-5 max-h-[220px] overflow-y-auto space-y-3 bg-[#050917]/40 min-h-[100px] flex flex-col justify-center">
+                <div className="p-6 overflow-y-auto flex-1 space-y-4 bg-[#050917]/40 min-h-[200px]">
                   {historicalSummaries.length === 0 ? (
-                    <div className="text-center text-slate-600 font-mono text-[11px] uppercase tracking-wider py-4">
-                      No dynamic sessions stored for this connection instance.
-                    </div>
+                    <div className="text-center text-slate-600 font-mono text-xs uppercase py-8">Zero database items associated with this secure user block profile.</div>
                   ) : (
-                    <div className="space-y-3 w-full">
-                      {historicalSummaries.map((item, index) => (
-                        <div key={index} className="p-3 bg-[#050917] border border-slate-800/80 hover:border-cyan-500/30 rounded flex flex-col sm:flex-row sm:items-start justify-between gap-3 transition-all">
-                          <div className="space-y-1">
-                            <div className="flex items-center space-x-2 text-[11px] font-mono">
-                              <span className="text-cyan-400 font-black tracking-wide">{item.session_id}</span>
-                              <span className="text-slate-600">•</span>
-                              <div className="flex items-center text-slate-500 space-x-1">
-                                <Clock className="h-3 w-3" />
-                                <span>{item.date}</span>
-                              </div>
+                    historicalSummaries.map((item, index) => (
+                      <div key={index} className="p-4 bg-[#050917] border border-slate-800/80 hover:border-cyan-500/20 rounded flex flex-col md:flex-row md:items-start justify-between gap-4 transition-all">
+                        <div className="space-y-2 flex-1">
+                          <div className="flex items-center space-x-3 text-[10px] font-mono">
+                            <span className="text-cyan-400 font-black tracking-widest px-1.5 py-0.5 rounded bg-cyan-950/60 border border-cyan-900/40">{item.meeting_id}</span>
+                            <div className="flex items-center text-slate-500 space-x-1">
+                              <Clock className="h-3 w-3" />
+                              <span>{item.meeting_date}</span>
                             </div>
-                            <p className="text-[11px] font-sans text-slate-400 line-clamp-2 leading-relaxed pl-1.5 border-l border-slate-800">
-                              {item.summary.split('========================================\n\n')[1] || item.summary}
-                            </p>
                           </div>
-                          <button 
-                            onClick={() => setSummaryData({ summary: item.summary, transcript: "", pdfUrl: "#" })}
-                            className="px-2.5 py-1 text-[10px] bg-[#0b132c] border border-slate-800 hover:border-cyan-500/40 text-slate-300 hover:text-cyan-400 font-mono font-bold uppercase rounded shrink-0 transition-all self-end sm:self-center"
-                          >
-                            Restore
-                          </button>
+                          <p className="text-xs font-mono text-slate-400 line-clamp-3 leading-relaxed whitespace-pre-wrap pl-3 border-l-2 border-slate-800">
+                            {item.summary}
+                          </p>
                         </div>
-                      ))}
-                    </div>
+                        <div className="flex md:flex-col items-stretch gap-2 shrink-0 self-end md:self-center w-full md:w-auto">
+                          <button onClick={() => { setSummaryData(item); setShowHistoryModal(false); }} className="px-3 py-1.5 text-[10px] bg-[#121f44] border border-cyan-900/40 hover:border-cyan-500/40 text-cyan-400 font-mono font-bold uppercase rounded transition-all flex-1 text-center">Restore View</button>
+                          {item.pdfUrl !== '#' && (
+                            <a href={`http://127.0.0.1:8000${item.pdfUrl}`} download className="px-3 py-1.5 text-[10px] bg-[#070e22] border border-slate-800 hover:border-slate-700 text-slate-300 font-mono font-bold uppercase rounded transition-all text-center flex items-center justify-center gap-1"><Download className="h-3 w-3" /> PDF</a>
+                          )}
+                        </div>
+                      </div>
+                    ))
                   )}
                 </div>
               </div>
-            </section>
-          </main>
+            </div>
+          )}
         </>
       )}
     </div>
