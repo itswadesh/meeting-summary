@@ -186,6 +186,3 @@ This project is designed so that audio transcription and AI summarization never 
 
 The MySQL database and SMTP server are expected to be on the same local network/intranet for a fully self-contained deployment.
 
-## License
-
-Specify your license here (e.g. MIT, Apache 2.0, or "Internal use only").
