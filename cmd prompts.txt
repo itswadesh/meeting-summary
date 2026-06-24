@@ -1,0 +1,13 @@
+1.
+back end 
+cd D:\Aryan\IntranetAIProject\hal-minutes-pipeline
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+2.
+front end 
+cd D:\Aryan\IntranetAIProject
+npm run dev 
+
+3.
+ollama
+ollama serve
