@@ -28,6 +28,7 @@ ollama==0.5.1
 # After installing Ollama, pull the model used by this project:
 #   ollama pull llama3
 
+
 # --- MySQL database connector (user accounts + summary history) ---
 mysql-connector-python==9.1.0
 
